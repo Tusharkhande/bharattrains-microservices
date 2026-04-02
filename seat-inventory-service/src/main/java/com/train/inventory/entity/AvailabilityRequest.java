@@ -1,0 +1,14 @@
+package com.train.inventory.entity;
+
+import lombok.Data;
+
+import java.time.LocalDate;
+
+@Data
+public class AvailabilityRequest {
+
+    private Long trainId;
+    private LocalDate journeyDate;
+    private int from;
+    private int to;
+}
