@@ -4,6 +4,7 @@ import com.train.inventory.service.SeatAllocationService;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/seats")
@@ -45,6 +46,13 @@ public class SeatController {
                 fromStation,
                 toStation
         );
+    }
+
+    @PostMapping("/availability/bulk")
+    public Map<Long, Integer> getBulkAvailability(
+            @RequestBody List<AvailabilityRequest> requests) {
+
+        return seatAllocationService.getBulkAvailability(requests);
     }
 
     @PostMapping("/cancel")

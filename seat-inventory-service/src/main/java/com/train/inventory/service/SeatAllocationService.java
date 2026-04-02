@@ -1,5 +1,6 @@
 package com.train.inventory.service;
 
+import com.train.inventory.entity.AvailabilityRequest;
 import com.train.inventory.entity.Seat;
 import com.train.inventory.entity.SeatAllocation;
 import com.train.inventory.entity.WaitingList;
@@ -9,7 +10,9 @@ import com.train.inventory.repository.WaitingListRepository;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 @Service
 public class SeatAllocationService {
@@ -288,5 +291,26 @@ public class SeatAllocationService {
         // Trigger promotion
         promotePassengers(trainId, date);
     }
+
+    public Map<Long, Integer> getBulkAvailability(
+            List<AvailabilityRequest> requests) {
+
+        Map<Long, Integer> result = new HashMap<>();
+
+        for (AvailabilityRequest req : requests) {
+
+            int count = checkSeatAvailability(
+                    req.getTrainId(),
+                    req.getJourneyDate(),
+                    req.getFrom(),
+                    req.getTo()
+            );
+
+            result.put(req.getTrainId(), count);
+        }
+
+        return result;
+    }
+
 
 }
