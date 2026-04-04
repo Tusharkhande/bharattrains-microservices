@@ -1,6 +1,8 @@
 package com.train.bookingservice.service;
 
+import com.train.bookingservice.client.NotificationClient;
 import com.train.bookingservice.client.SeatInventoryClient;
+import com.train.bookingservice.client.UserClient;
 import com.train.bookingservice.dto.BookingDetailsResponse;
 import com.train.bookingservice.dto.BookingRequestDTO;
 import com.train.bookingservice.dto.PassengerDTO;
@@ -9,12 +11,10 @@ import com.train.bookingservice.entity.Booking;
 import com.train.bookingservice.entity.Passenger;
 import com.train.bookingservice.repository.BookingRepository;
 import com.train.bookingservice.repository.PassengerRepository;
+
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.bind.annotation.DeleteMapping;
-import org.springframework.web.bind.annotation.PathVariable;
 
-import java.time.LocalDate;
 import java.util.List;
 
 @Service
@@ -23,18 +23,29 @@ public class BookingService {
     private final BookingRepository bookingRepository;
     private final PassengerRepository passengerRepository;
     private final SeatInventoryClient seatClient;
+    private final NotificationClient notificationClient;
+    private final UserClient userClient;
 
-    public BookingService(BookingRepository bookingRepository,
-                          PassengerRepository passengerRepository,
-                          SeatInventoryClient seatClient) {
+    public BookingService(
+            BookingRepository bookingRepository,
+            PassengerRepository passengerRepository,
+            SeatInventoryClient seatClient,
+            NotificationClient notificationClient,
+            UserClient userClient
+    ) {
         this.bookingRepository = bookingRepository;
         this.passengerRepository = passengerRepository;
         this.seatClient = seatClient;
+        this.notificationClient = notificationClient;
+        this.userClient = userClient;
     }
 
     public Booking createBooking(BookingRequestDTO request) {
 
-        //  Create booking
+        // Fetch email from User Service
+        String email = userClient.getUserEmail(request.getUserId());
+
+        // Create booking
         Booking booking = new Booking();
         booking.setTrainId(request.getTrainId());
         booking.setJourneyDate(request.getJourneyDate());
@@ -45,7 +56,6 @@ public class BookingService {
 
         bookingRepository.save(booking);
 
-        //Allocate seats per passenger
         boolean allConfirmed = true;
 
         for (PassengerDTO p : request.getPassengers()) {
@@ -56,7 +66,7 @@ public class BookingService {
             passenger.setAge(p.getAge());
             passenger.setGender(p.getGender());
 
-            passengerRepository.save(passenger); // ✅ FIRST SAVE
+            passengerRepository.save(passenger);
 
             String status = seatClient.bookSeat(
                     request.getTrainId(),
@@ -64,16 +74,29 @@ public class BookingService {
                     request.getFromStation(),
                     request.getToStation(),
                     booking.getBookingId(),
-                    passenger.getPassengerId()   // ✅ pass this
+                    passenger.getPassengerId()
             );
 
             passenger.setStatus(status);
+
+            if (!"CONFIRMED".equals(status)) {
+                allConfirmed = false;
+            }
+
             passengerRepository.save(passenger);
         }
 
-        //Update booking status
+        // Update booking status
         booking.setStatus(allConfirmed ? "CONFIRMED" : "PARTIAL");
         bookingRepository.save(booking);
+
+        // 🔔 SEND NOTIFICATION
+        notificationClient.sendNotification(
+                booking.getBookingId(),
+                "Booking created successfully. PNR: " + booking.getPnr(),
+                email,
+                "BOOKING_CREATED"
+        );
 
         return booking;
     }
@@ -84,18 +107,15 @@ public class BookingService {
 
     public BookingDetailsResponse getBookingByPNR(String pnr) {
 
-        //Fetch booking
         Booking booking = bookingRepository.findByPnr(pnr);
 
         if (booking == null) {
             throw new RuntimeException("PNR not found");
         }
 
-        // Fetch passengers
         List<Passenger> passengers =
                 passengerRepository.findByBookingId(booking.getBookingId());
 
-        // Map passengers → DTO
         List<PassengerDetails> passengerDetailsList =
                 passengers.stream()
                         .map(p -> new PassengerDetails(
@@ -106,7 +126,6 @@ public class BookingService {
                         ))
                         .toList();
 
-        //  Build response
         return new BookingDetailsResponse(
                 booking.getPnr(),
                 booking.getTrainId(),
@@ -121,7 +140,6 @@ public class BookingService {
     @Transactional
     public String cancelBooking(String pnr) {
 
-        // Find booking
         Booking booking = bookingRepository.findByPnr(pnr);
 
         if (booking == null) {
@@ -139,7 +157,6 @@ public class BookingService {
                 booking.getJourneyDate()
         );
 
-        //Update passengers
         List<Passenger> passengers =
                 passengerRepository.findByBookingId(booking.getBookingId());
 
@@ -148,9 +165,19 @@ public class BookingService {
             passengerRepository.save(p);
         }
 
-        //Update booking
         booking.setStatus("CANCELLED");
         bookingRepository.save(booking);
+
+        // Fetch email from User Service
+        String email = userClient.getUserEmailByBookingId(booking.getBookingId());
+
+        // 🔔 SEND NOTIFICATION
+        notificationClient.sendNotification(
+                booking.getBookingId(),
+                "Your booking with PNR " + booking.getPnr() + " has been cancelled.",
+                email,
+                "BOOKING_CANCELLED"
+        );
 
         return "Booking cancelled successfully";
     }
@@ -166,22 +193,32 @@ public class BookingService {
             return "Passenger already cancelled";
         }
 
-        //Call seat service
-        Booking booking = bookingRepository.findById(passenger.getBookingId())
-                .orElseThrow(() -> new RuntimeException("Booking not found"));
+        Booking booking =
+                bookingRepository.findById(passenger.getBookingId())
+                        .orElseThrow(() -> new RuntimeException("Booking not found"));
 
+        // Call seat service
         seatClient.cancelPassenger(
                 passengerId,
                 booking.getTrainId(),
                 booking.getJourneyDate()
         );
 
-        // Update passenger
         passenger.setStatus("CANCELLED");
         passengerRepository.save(passenger);
 
-        // Recalculate booking status
         updateBookingStatus(booking.getBookingId());
+
+        // Fetch email
+        String email = userClient.getUserEmailByBookingId(booking.getBookingId());
+
+        // 🔔 SEND NOTIFICATION
+        notificationClient.sendNotification(
+                booking.getBookingId(),
+                "Passenger " + passenger.getName() + " has been cancelled from booking PNR: " + booking.getPnr(),
+                email,
+                "PASSENGER_CANCELLED"
+        );
 
         return "Passenger cancelled successfully";
     }
@@ -191,11 +228,11 @@ public class BookingService {
         List<Passenger> passengers =
                 passengerRepository.findByBookingId(bookingId);
 
-        boolean allCancelled = passengers.stream()
-                .allMatch(p -> p.getStatus().equals("CANCELLED"));
+        boolean allCancelled =
+                passengers.stream().allMatch(p -> p.getStatus().equals("CANCELLED"));
 
-        boolean allConfirmed = passengers.stream()
-                .allMatch(p -> p.getStatus().equals("CONFIRMED"));
+        boolean allConfirmed =
+                passengers.stream().allMatch(p -> p.getStatus().equals("CONFIRMED"));
 
         Booking booking = bookingRepository.findById(bookingId).get();
 
@@ -209,5 +246,4 @@ public class BookingService {
 
         bookingRepository.save(booking);
     }
-
 }

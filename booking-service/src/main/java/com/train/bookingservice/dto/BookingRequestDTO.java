@@ -8,6 +8,8 @@ import java.util.List;
 @Data
 public class BookingRequestDTO {
 
+    private Long userId;
+
     private Long trainId;
 
     private LocalDate journeyDate;
